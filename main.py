@@ -14,7 +14,9 @@ Semua berkas kerja berada di folder ``files``, di samping ``main.py``::
         ├── English.xlsx     hasil export
         ├── English.txt      teks saja: index, text
         ├── English_new.bin  hasil import / tambah / hapus string
-        └── Labels_new.bin   hasil tambah / hapus label
+        ├── English_edited.bin hasil edit teks
+        ├── Labels_new.bin   hasil tambah / hapus label
+        └── Labels_edited.bin hasil edit label
 
 ``English.bin`` dan ``Labels.bin`` adalah sepasang. ``English.bin`` berisi
 teks, ``Labels.bin`` berisi nama simbol untuk tiap ``Key``. Tanpa
@@ -33,11 +35,17 @@ Atau langsung lewat argumen::
     python main.py from-txt English.txt --base English.xlsx
     python main.py add-string --label MY_STRING --text "Teks baru"
     python main.py remove-string --key 0x1234ABCD
+    python main.py edit-string --target "C:/Path/English.bin" --key 0x1234ABCD --text "Teks baru"
     python main.py info English_new.bin
     python main.py verify "*.bin"
 
 Nama berkas tanpa folder dianggap relatif terhadap ``files``. Path lengkap
 atau path dengan folder (``D:\\kerja\\English.bin``) dipakai apa adanya.
+
+Perintah ``edit-string`` menerima dua sumber:
+
+- ``--target`` : path bebas, di luar ``files`` juga boleh.
+- ``--bin``    : nama berkas di dalam ``files``.
 
 Fungsi utama ada di paket :mod:`lib`:
 
@@ -48,6 +56,7 @@ Fungsi utama ada di paket :mod:`lib`:
 - :mod:`lib.nfstxt`    jembatan tabel <-> ``.txt`` berformat ``index, text``
 - :mod:`lib.nfsadd`    tambah string baru (key + label + text)
 - :mod:`lib.nfsremove` hapus string lama berdasarkan key
+- :mod:`lib.nfsedit`   ubah teks dan/atau label satu key
 - :mod:`lib.tui`       tampilan terminal dan pembacaan masukan
 
 Tool ini hanya memindahkan data. Tidak ada pemrosesan isi teks di dalamnya.
@@ -66,6 +75,7 @@ sys.path.insert(0, str(HERE / "lib"))
 import nfsbin          # noqa: E402
 import nfsadd          # noqa: E402
 import nfsremove       # noqa: E402
+import nfsedit         # noqa: E402
 import nfsexport       # noqa: E402
 import nfsimport       # noqa: E402
 import nfstable        # noqa: E402
@@ -129,6 +139,25 @@ def _output_path(value: str | Path | None, default_name: str) -> Path:
     if p.parent != Path("."):
         return p
     return FILES_DIR / p
+
+
+def _target_path(value: str | Path) -> Path:
+    """Path ``--target``: dipakai apa adanya, tanpa mencari di ``files``."""
+    return Path(str(value).strip().strip('"')).expanduser()
+
+
+def _edit_output(
+    value: str | Path | None,
+    default: Path,
+    base_dir: Path,
+) -> Path:
+    """Berkas hasil edit: nama polos mengikuti folder sumber."""
+    if value is None or not str(value).strip():
+        return default
+    p = Path(str(value).strip().strip('"')).expanduser()
+    if p.is_absolute() or p.parent != Path("."):
+        return p
+    return base_dir / p
 
 
 def _expand(pattern: str) -> list[Path]:
@@ -826,6 +855,183 @@ def _print_remove_report(report: nfsremove.RemoveReport) -> None:
         tui.ok("Verifikasi: LOLOS (key dan teks tersisa tidak berubah)")
 
 
+def run_edit_string(
+    bin_path: str | Path | None = None,
+    target: str | Path | None = None,
+    key_text: str | None = None,
+    text: str | None = None,
+    label: str | None = None,
+    out_path: str | Path | None = None,
+    labels_path: str | Path | None = None,
+    labels_out: str | Path | None = None,
+    *,
+    escapes: bool = False,
+) -> int:
+    """Ubah teks dan/atau label satu key lewat ``--target`` atau ``--bin``."""
+    _ensure_files_dir()
+
+    if target is not None and str(target).strip():
+        source = _target_path(target)
+        out_dir = source.parent
+    else:
+        source = _input_path(bin_path) if bin_path else FILES_DIR / DEFAULT_BIN
+        out_dir = FILES_DIR
+    if source is None or not source.exists():
+        return _not_found(source or FILES_DIR / DEFAULT_BIN)
+
+    if key_text is None or not str(key_text).strip():
+        tui.err("Isi --key sebagai acuan string yang diubah.")
+        return 2
+    key = nfstable.parse_key(str(key_text))
+    if key is None:
+        tui.err(
+            "Key '%s' tidak dapat dibaca. Tulis heksadesimal, mis. "
+            "0x1234ABCD." % key_text
+        )
+        return 2
+    if not 0 < key <= 0xFFFFFFFF:
+        tui.err("Key 0x%X di luar rentang u32." % key)
+        return 2
+
+    payload: bytes | None = None
+    if text is not None:
+        value = str(text)
+        if escapes:
+            value = nfsadd.decode_escapes(value)
+        try:
+            payload = value.encode(nfsbin.ENCODING)
+        except UnicodeEncodeError as exc:
+            tui.err("Teks tidak dapat diwakili encoding %s." % nfsbin.ENCODING)
+            tui.note("Karakter bermasalah ada di posisi %d." % exc.start)
+            return 2
+        if b"\x00" in payload:
+            tui.err("Teks mengandung byte NUL, tidak bisa disimpan.")
+            return 2
+
+    new_label: str | None = None
+    if label is not None:
+        new_label = str(label).strip()
+        if not new_label:
+            tui.err("Label tidak boleh kosong.")
+            return 2
+
+    if payload is None and new_label is None:
+        tui.err("Isi minimal satu: --text atau --label.")
+        return 2
+
+    labels: Path | None = None
+    if new_label is not None:
+        if labels_path is not None and str(labels_path).strip():
+            labels = _input_path(labels_path)
+        else:
+            beside = source.parent / DEFAULT_LABELS
+            labels = beside if beside.exists() else _auto_labels()
+        if labels is None or not labels.exists():
+            tui.err("Labels.bin tidak ditemukan untuk menyimpan label.")
+            tui.note(
+                "Letakkan %s di folder yang sama dengan berkas target, "
+                "atau tentukan --labels." % DEFAULT_LABELS
+            )
+            return 2
+        if labels.resolve() == source.resolve():
+            tui.err("Berkas Labels.bin tidak boleh sama dengan berkas bahasa.")
+            return 2
+
+    text_out: Path | None = None
+    if payload is not None:
+        text_out = _edit_output(
+            out_path, out_dir / (source.stem + "_edited.bin"), out_dir
+        )
+        if text_out.resolve() == source.resolve():
+            tui.err("Hasil tidak boleh menimpa berkas sumber.")
+            return 2
+        if labels is not None and text_out.resolve() == labels.resolve():
+            tui.err("Hasil teks tidak boleh menimpa Labels.bin sumber.")
+            return 2
+
+    label_out: Path | None = None
+    if labels is not None:
+        default_label_out = labels.with_name(labels.stem + "_edited.bin")
+        if payload is None and out_path is not None and labels_out is None:
+            label_out = _edit_output(out_path, default_label_out, labels.parent)
+        else:
+            label_out = _edit_output(labels_out, default_label_out, labels.parent)
+        if label_out.resolve() == labels.resolve():
+            tui.err("Hasil Labels.bin tidak boleh menimpa Labels.bin sumber.")
+            return 2
+
+    try:
+        report = nfsedit.edit_string(
+            source,
+            key,
+            text=payload,
+            label=new_label,
+            out_path=text_out,
+            labels_path=labels,
+            labels_out=label_out,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        tui.err(str(exc))
+        return 2
+
+    _print_edit_report(report)
+    if not report.verified or report.problems:
+        return 1
+
+    print()
+    if report.text_output is not None:
+        tui.ok("Berkas siap dipakai: %s" % report.text_output)
+        tui.note("Salin ke LANGUAGES\\%s (cadangkan yang asli dulu)."
+                 % source.name)
+    if report.label_output is not None:
+        tui.ok("Label siap dipakai: %s" % report.label_output)
+    return 0
+
+
+def _print_edit_report(report: nfsedit.EditReport) -> None:
+    tui.kv([
+        ("Sumber", report.source),
+        ("Key", "0x%08X" % report.key),
+        ("Entri", _num(report.total)),
+    ])
+
+    if report.new_text is not None:
+        print()
+        tui.section("Teks")
+        tui.kv([
+            ("Lama", nfstxt.escape_text(
+                (report.old_text or b"").decode(nfsbin.ENCODING))),
+            ("Baru", nfstxt.escape_text(
+                report.new_text.decode(nfsbin.ENCODING))),
+            ("Hasil", report.text_output or "(tidak ditulis)"),
+        ])
+        if report.text_offset_shared:
+            tui.note("Teks key ini dipakai bersama key lain, jadi dipisah.")
+
+    if report.new_label is not None:
+        print()
+        tui.section("Label")
+        tui.kv([
+            ("Sumber", report.label_source or "(tidak ada)"),
+            ("Lama", report.old_label or "(kosong)"),
+            ("Baru", report.new_label),
+            ("Hasil", report.label_output or "(tidak ditulis)"),
+            ("Total label", _num(report.labels_total)),
+        ])
+        if report.label_created:
+            tui.note("Key ini belum punya label, label baru ditambahkan.")
+
+    print()
+    if report.problems:
+        tui.section("Error (%d)" % len(report.problems))
+        for problem in report.problems[:15]:
+            tui.err(problem)
+        if len(report.problems) > 15:
+            tui.note("... dan %d error lain" % (len(report.problems) - 15))
+    else:
+        tui.ok("Verifikasi: LOLOS (teks/label lain tidak berubah)")
+
+
 # ---------------------------------------------------------------- perintah CLI
 
 
@@ -880,6 +1086,20 @@ def cmd_remove_string(args) -> int:
     )
 
 
+def cmd_edit_string(args) -> int:
+    return run_edit_string(
+        args.bin,
+        args.target,
+        args.key,
+        args.text,
+        args.label,
+        args.output,
+        args.labels,
+        args.labels_out,
+        escapes=args.escape,
+    )
+
+
 # ---------------------------------------------------------------- menu
 
 
@@ -899,6 +1119,7 @@ def menu() -> int:
                 "Dari TXT",
                 "Tambah String",
                 "Hapus String",
+                "Edit String",
                 "Info",
                 "Verify",
                 "Buka folder files",
@@ -908,7 +1129,7 @@ def menu() -> int:
             label="Pilih",
         )
 
-        if choice in (0, 10):
+        if choice in (0, 11):
             tui.abort("Sampai jumpa.")
             return 0
 
@@ -925,10 +1146,12 @@ def menu() -> int:
         elif choice == 6:
             _menu_remove_string()
         elif choice == 7:
-            _menu_info()
+            _menu_edit_string()
         elif choice == 8:
-            _menu_verify()
+            _menu_info()
         elif choice == 9:
+            _menu_verify()
+        elif choice == 10:
             _menu_open_files()
         tui.pause()
 
@@ -984,6 +1207,7 @@ def _show_info() -> None:
                      "dengan teks dari .txt"),
         ("Tambah String", "tambah satu key + label + text baru ke .bin"),
         ("Hapus String", "hapus satu atau beberapa key dari .bin"),
+        ("Edit String", "ubah teks dan/atau label satu key di .bin"),
         ("Info", "lihat header dan tata letak satu berkas .bin"),
         ("Verify", "uji bahwa berkas .bin dibaca dan ditulis ulang persis sama"),
     ])
@@ -1333,6 +1557,114 @@ def _menu_remove_string() -> None:
         tui.ok("Selesai.")
 
 
+def _menu_edit_string() -> None:
+    tui.screen("Edit String  (.bin -> .bin)")
+    bins = _bins_in_files()
+    if not bins:
+        tui.err("Tidak ada berkas .bin di folder files.")
+        return
+
+    tui.section("1. Berkas .bin")
+    bin_name = tui.pick(_names(bins), "Berkas .bin", _default_bin_name())
+    source = _input_path(bin_name)
+    if source is None or not source.exists():
+        _not_found(source or FILES_DIR / bin_name)
+        return
+
+    db = nfsbin.parse(source)
+    print()
+    tui.kv([
+        ("Berkas", source),
+        ("Entri", _num(db.count)),
+    ])
+
+    print()
+    tui.section("2. String yang diubah")
+    key_text = tui.ask("Key (0x...)")
+    key = nfstable.parse_key(key_text)
+    if key is None:
+        tui.err(
+            "Key '%s' tidak dapat dibaca. Tulis heksadesimal, mis. "
+            "0x1234ABCD." % key_text
+        )
+        return
+    if not 0 < key <= 0xFFFFFFFF:
+        tui.err("Key 0x%X di luar rentang u32." % key)
+        return
+
+    texts = db.text_by_key()
+    payload = texts.get(key)
+    if payload is None:
+        tui.err("Key 0x%08X tidak ada di %s." % (key, source.name))
+        tui.note("Lihat kolom Key pada tabel hasil Export.")
+        return
+
+    labels_path = _auto_labels()
+    label = ""
+    if labels_path is not None and labels_path.resolve() != Path(source).resolve():
+        try:
+            label_map = nfsbin.parse(labels_path).text_by_key()
+        except (ValueError, OSError):
+            label_map = {}
+        if key in label_map:
+            label = label_map[key].decode(nfsbin.ENCODING)
+    else:
+        labels_path = None
+
+    print()
+    tui.kv([
+        ("Key", "0x%08X" % key),
+        ("Label", label or "(kosong)"),
+        ("Teks", nfstxt.escape_text(payload.decode(nfsbin.ENCODING))),
+    ])
+
+    print()
+    tui.section("3. Nilai baru")
+    tui.note("Kosongkan salah satu bila tidak ingin mengubahnya.")
+    new_text = tui.ask_text("Teks baru (\\xHH untuk byte kontrol)")
+    new_label = tui.ask_optional("Label baru")
+    if not new_text and not new_label:
+        tui.err("Isi minimal satu: teks atau label.")
+        return
+    if new_label and labels_path is None:
+        tui.err("Labels.bin tidak ada, label tidak bisa disimpan.")
+        tui.note("Taruh %s di folder files untuk mengubah label."
+                 % DEFAULT_LABELS)
+        return
+
+    print()
+    if new_text:
+        default_out = Path(source).stem + "_edited.bin"
+        out = tui.ask("Nama berkas hasil", default_out)
+        labels_out = None
+    else:
+        out = None
+        base_name = labels_path.stem if labels_path is not None else "Labels"
+        labels_out = tui.ask("Nama berkas label hasil", base_name + "_edited.bin")
+
+    print()
+    if not tui.confirm("Lanjutkan", True):
+        tui.abort("Dibatalkan.")
+        return
+
+    print()
+    tui.rule()
+    code = run_edit_string(
+        source,
+        None,
+        "0x%08X" % key,
+        new_text or None,
+        new_label or None,
+        out,
+        labels_path,
+        labels_out,
+        escapes=True,
+    )
+    if code == 0:
+        print()
+        tui.ok("Selesai.")
+
+
 def _menu_info() -> None:
     tui.screen("Info  (struktur .bin)")
     bins = _bins_in_files()
@@ -1386,13 +1718,49 @@ def _menu_open_files() -> None:
 # ---------------------------------------------------------------- argumen
 
 
+def _add_edit_arguments(p: argparse.ArgumentParser) -> None:
+    """Opsi ``edit-string``, dipakai juga oleh bentuk argumen langsung."""
+    p.add_argument("--target", help="path .bin bebas, boleh di luar folder files")
+    p.add_argument("--bin", help="berkas .bin di folder files "
+                                 "(baku: files/English.bin)")
+    p.add_argument("--key", required=True,
+                   help="key acuan yang diubah, mis. 0x1234ABCD")
+    p.add_argument("--text", help="teks baru untuk key itu")
+    p.add_argument("--label", help="label baru untuk key itu")
+    p.add_argument("--escape", action="store_true",
+                   help="tafsirkan \\xHH pada --text sebagai byte kontrol")
+    p.add_argument("--labels", help="Labels.bin tujuan label "
+                                    "(baku: di samping target, lalu files/)")
+    p.add_argument("--labels-out", help="hasil Labels.bin "
+                                        "(baku: <nama>_edited.bin)")
+    p.add_argument("-o", "--output", help="berkas .bin hasil "
+                                          "(baku: <nama>_edited.bin)")
+
+
+def build_direct_edit_parser() -> argparse.ArgumentParser:
+    """Parser untuk bentuk langsung tanpa subperintah.
+
+    Contoh::
+
+        python main.py --target "C:/Path/English.bin" --key 0x12121212 --text "Baru"
+    """
+    parser = argparse.ArgumentParser(
+        prog=APP_NAME,
+        description="Ubah teks dan/atau label satu key langsung lewat argumen.",
+    )
+    _add_edit_arguments(parser)
+    parser.set_defaults(func=cmd_edit_string)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
         description="Ekspor dan impor basis data string NFSMW (.bin <-> xlsx/csv), "
-                    "termasuk jembatan txt serta tambah dan hapus string. "
+                    "termasuk jembatan txt serta tambah, hapus, dan edit string. "
                     "Berkas kerja dibaca dan ditulis di folder 'files'.",
-        epilog="Jalankan tanpa argumen untuk masuk menu interaktif.",
+        epilog="Jalankan tanpa argumen untuk masuk menu interaktif. "
+               "Bentuk langsung: main.py --target \"./English.bin\" --key 0x1234ABCD --text \"Baru\"",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -1462,6 +1830,10 @@ def build_parser() -> argparse.ArgumentParser:
                                           "(baku: files/<nama>_new.bin)")
     p.set_defaults(func=cmd_remove_string)
 
+    p = sub.add_parser("edit-string", help="ubah teks dan/atau label satu key")
+    _add_edit_arguments(p)
+    p.set_defaults(func=cmd_edit_string)
+
     p = sub.add_parser("info", help="tampilkan struktur .bin")
     p.add_argument("bin", nargs="?", help="berkas .bin (baku: files/English.bin)")
     p.set_defaults(func=cmd_info)
@@ -1481,7 +1853,10 @@ def main(argv: list[str] | None = None) -> int:
     if not argv:
         return menu()
 
-    args = build_parser().parse_args(argv)
+    direct = argv[0].startswith("-") and argv[0] not in ("-h", "--help")
+    args = (
+        build_direct_edit_parser() if direct else build_parser()
+    ).parse_args(argv)
     if not getattr(args, "func", None):
         return menu()
 

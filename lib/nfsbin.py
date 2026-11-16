@@ -76,6 +76,7 @@ __all__ = [
     "rebuild",
     "insert_entries",
     "remove_entries",
+    "replace_text",
     "binhash",
     "verify_roundtrip",
     "inspect_header",
@@ -439,6 +440,41 @@ def remove_entries(db: StringDB, keys: list[int]) -> bytes:
         [entry for entry, _ in pairs],
         [text for _, text in pairs],
     )
+
+
+def replace_text(db: StringDB, key: int, payload: bytes) -> bytes:
+    """Ganti teks satu key tanpa menyentuh key lain.
+
+    Bila ``key`` berbagi offset dengan key lain, entri itu dipindahkan ke
+    offset baru supaya teks pasangannya tidak ikut berubah. Urutan tabel dan
+    seluruh nilai key dipertahankan.
+    """
+    if not isinstance(key, int) or isinstance(key, bool):
+        raise ValueError("key harus berupa angka: %r" % (key,))
+    if not 0 < key <= 0xFFFFFFFF:
+        raise ValueError("key 0x%X di luar rentang u32" % key)
+    if not isinstance(payload, (bytes, bytearray)):
+        raise ValueError("teks key 0x%08X harus berupa bytes" % key)
+    payload = bytes(payload)
+    check_text(payload, key)
+
+    index = None
+    for position, (existing, _) in enumerate(db.entries):
+        if existing == key:
+            index = position
+            break
+    if index is None:
+        raise ValueError("key 0x%08X tidak ada di %s" % (key, db.path.name))
+
+    old_offset = db.entries[index][1]
+    shared = sum(1 for _, off in db.entries if off == old_offset) > 1
+
+    entries = list(db.entries)
+    texts = list(db.texts)
+    if shared:
+        entries[index] = (key, max((off for _, off in db.entries), default=-1) + 1)
+    texts[index] = payload
+    return _assemble(db, entries, texts)
 
 
 def verify_roundtrip(path: str | Path) -> tuple[bool, str]:

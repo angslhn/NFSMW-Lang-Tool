@@ -1,21 +1,22 @@
 # NFSMW Lang Tool
 
 Alat pengelola basis data string **Need for Speed Most Wanted** (2005, Black
-Edition). Lima jalur, semuanya bekerja pada data:
+Edition). Enam jalur, semuanya bekerja pada data:
 
 - **Export** — `English.bin` → `English.xlsx` / `English.csv`
 - **Import** — `English.xlsx` / `English.csv` → `English.bin`
 - **TXT** — tabel ⇄ `English.txt` berformat `index, text`, hanya dua kolom
 - **Tambah String** — menambahkan satu entri baru (`Key` + `Label` + `Text`)
 - **Hapus String** — menghapus satu atau beberapa entri berdasarkan `Key`
+- **Edit String** — mengubah `Text` dan/atau `Label` satu `Key` yang sudah ada
 
 Semua entri masuk ke tabel empat kolom, diedit sepuasnya di Excel, lalu
 dikembalikan menjadi berkas `.bin` yang sah. Tidak ada kategori, tidak ada
 kolom tambahan.
 
 Tambah dan Hapus String adalah operasi yang mengubah jumlah entri. Export,
-Import, dan TXT tidak pernah mengubah urutan tabel atau nilai `Key` yang
-sudah ada.
+Import, TXT, dan Edit String tidak pernah mengubah urutan tabel atau nilai
+`Key` yang sudah ada.
 
 ---
 
@@ -35,10 +36,12 @@ NFSMW Lang Tool/
     ├── English.xlsx     # Hasil export
     ├── English.txt      # Teks saja: index, text
     ├── English_new.bin  # Hasil import / tambah / hapus string
-    └── Labels_new.bin   # Hasil tambah / hapus label
+    ├── English_edited.bin  # Hasil edit teks
+    ├── Labels_new.bin   # Hasil tambah / hapus label
+    └── Labels_edited.bin   # Hasil edit label
 ```
 
-Folder `files/` dibuat otomatis kalau belum ada. Menu `9` membukanya di
+Folder `files/` dibuat otomatis kalau belum ada. Menu `10` membukanya di
 Windows Explorer.
 
 ### `English.bin` butuh `Labels.bin`
@@ -118,6 +121,7 @@ python main.py
      dari .txt
    - Tambah String : tambah satu key + label + text baru ke .bin
    - Hapus String : hapus satu atau beberapa key dari .bin
+   - Edit String : ubah teks dan/atau label satu key di .bin
    - Info : lihat header dan tata letak satu berkas .bin
    - Verify : uji bahwa berkas .bin dibaca dan ditulis ulang persis sama
 
@@ -130,10 +134,11 @@ python main.py
     4. Dari TXT
     5. Tambah String
     6. Hapus String
-    7. Info
-    8. Verify
-    9. Buka folder files
-    10. Keluar
+    7. Edit String
+    8. Info
+    9. Verify
+    10. Buka folder files
+    11. Keluar
 
   [= Pilih =>
 ```
@@ -190,6 +195,24 @@ Alur menghapus string:
 6. Salin `.bin` hasil (dan `Labels_new.bin` bila dipakai) ke folder
    `LANGUAGES` setelah mencadangkan berkas asli.
 
+Alur mengedit string:
+
+1. Pilih **7 (Edit String)**.
+2. Tentukan berkas `.bin` di `files/` yang akan diedit.
+3. Tulis `Key` acuan. Nilainya bisa dilihat di kolom `Key` pada tabel hasil
+   Export.
+4. Kosongkan salah satu isian bila tidak ingin mengubahnya:
+   - isi **Teks baru** untuk mengganti `Text`,
+   - isi **Label baru** untuk mengganti `Label`.
+5. Tentukan nama hasil. Untuk perubahan teks, bakunya
+   `English_edited.bin`. Untuk perubahan label saja, bakunya
+   `Labels_edited.bin`.
+6. Salin hasilnya ke folder `LANGUAGES` setelah mencadangkan berkas asli.
+
+Edit String tidak mengubah jumlah entri, urutan tabel, atau nilai `Key`.
+Setelah mengedit teks, Export ulang `.bin` hasilnya bila ingin melihat
+perubahan di tabel.
+
 Setelah menambah atau menghapus string, **Export ulang** `.bin` hasilnya bila
 ingin melihat perubahan di tabel. `Index` baris sesudah titik sisip atau titik
 hapus ikut bergeser, karena tabel harus tetap urut menurut `Key`.
@@ -207,6 +230,7 @@ python main.py to-txt English.xlsx
 python main.py from-txt English.txt --base English.xlsx
 python main.py add-string --label MY_STRING --text "Teks baru"
 python main.py remove-string --key 0x1234ABCD
+python main.py edit-string --bin English.bin --key 0x1234ABCD --text "Teks baru"
 python main.py info English_new.bin
 python main.py verify "*.bin"
 ```
@@ -222,8 +246,40 @@ python main.py from-txt kerja\English.txt --base English.xlsx
 python main.py add-string --bin English.bin --label MY_STRING --text "Teks baru" --labels Labels.bin
 python main.py add-string --key 0x1234ABCD --text "Teks baru" -o English_tambah.bin
 python main.py remove-string --bin English.bin --key 0x1234ABCD --labels Labels.bin -o English_hapus.bin
+python main.py edit-string --bin English.bin --key 0x1234ABCD --label LABEL_BARU
+python main.py edit-string --target "D:\kerja\English.bin" --key 0x1234ABCD --text "Teks baru"
 python main.py info "D:\kerja\English.bin"
 ```
+
+### Edit String tanpa subperintah
+
+`edit-string` juga bisa dipanggil langsung, tanpa nama perintah:
+
+```
+python main.py --target "C:/Path/English.bin" --key 0x12345678 --text "Teks Baru"
+python main.py --target "C:/Path/English.bin" --key 0x12345678 --label LABEL_BARU
+python main.py --target "C:/Path/English.bin" --key 0x12345678 --label LABEL_BARU --text "Teks Baru"
+```
+
+Bedanya `--target` dan `--bin`:
+
+- `--target` menerima path bebas, termasuk berkas di luar folder `files/`.
+  `Labels.bin` dicari di folder yang sama dengan target; bila tidak ada,
+  dipakai `files/Labels.bin`.
+- `--bin` menerima nama/path berkas di dalam `files/`. Sumber dan label
+  diambil dari sana.
+
+Hasil baku:
+
+| Perubahan           | Berkas hasil                        |
+| ------------------- | ----------------------------------- |
+| `--text`            | `<nama>_edited.bin` di folder sumber |
+| `--label`           | `Labels_edited.bin` di folder label  |
+| `--text` + `--label`| keduanya                            |
+
+`-o/--output` menentukan hasil `.bin`. Untuk edit label saja, `-o` dipakai
+sebagai nama hasil label. `--labels-out` selalu khusus untuk hasil label dan
+`--labels` untuk memilih `Labels.bin` sumber.
 
 | Perintah        | Guna                               | Hasil baku                  |
 | --------------- | ---------------------------------- | --------------------------- |
@@ -234,6 +290,7 @@ python main.py info "D:\kerja\English.bin"
 | `from-txt`      | `.txt` + tabel dasar → tabel baru  | `files/<txt>_new.<format>`  |
 | `add-string`    | tambah satu entri baru ke `.bin`   | `files/<nama>_new.bin`      |
 | `remove-string` | hapus entri menurut `Key`          | `files/<nama>_new.bin`      |
+| `edit-string`   | ubah teks/label satu `Key`         | `<nama>_edited.bin` / `Labels_edited.bin` |
 | `info`          | header dan tata letak berkas       | —                           |
 | `verify`        | uji `parse → rebuild` byte-identik | —                           |
 
@@ -300,10 +357,10 @@ tanda itu hilang dan isinya cuma mengulang kolom `Key` di sebelahnya.
   yang terurut naik; urutan tabel adalah bagian dari format.
 - **Jangan ubah/hapus nilai `Key`.** Sama alasannya.
 - **Jangan ubah `Index`.** Import memakai kolom ini untuk mencocokkan baris.
-- **Jangan tambah atau hapus baris di tabel.** Untuk menambah atau menghapus
-  entri, pakai menu **5 (Tambah String)** atau **6 (Hapus String)**; tool yang
-  mengurutkan dan menghitung ulang offset. Baris yang tidak ada di tabel akan
-  memakai teks asli.
+- **Jangan tambah atau hapus baris di tabel.** Untuk menambah, menghapus, atau
+  mengubah satu entri, pakai menu **5 (Tambah String)**, **6 (Hapus String)**,
+  atau **7 (Edit String)**; tool yang mengurutkan dan menghitung ulang offset.
+  Baris yang tidak ada di tabel akan memakai teks asli.
 - Setelah menambah atau menghapus string, **Export ulang** `.bin` hasilnya.
   `Index` baris sesudah titik sisip atau titik hapus bergeser, jadi tabel lama
   tidak lagi cocok untuk `.bin` yang sudah berubah jumlah entrinya.
@@ -496,6 +553,74 @@ dihapus dari salinan `Labels_new.bin` (bisa diubah dengan `--labels-out`).
 
 ---
 
+## Edit string
+
+Menu **7** mengubah satu string yang sudah ada. Acuannya `Key`; yang boleh
+diubah adalah `Text`, `Label`, atau keduanya. Jumlah entri tidak berubah.
+
+### Dua sumber berkas
+
+| Opsi       | Arti                                                        |
+| ---------- | ----------------------------------------------------------- |
+| `--target` | path bebas, boleh jauh di luar folder `files/`              |
+| `--bin`    | nama berkas di dalam `files/`                               |
+
+Untuk `--target`, `Labels.bin` dicari di folder yang sama dengan target. Bila
+tidak ada, dipakai `files/Labels.bin`. Untuk `--bin`, sumber dan label
+diambil dari `files/`. `--labels` selalu menimpa pilihan otomatis itu.
+
+### Mekanisme
+
+1. `Key` diperiksa: harus ada di berkas bahasa, berupa `u32`, dan bukan nol.
+2. Bila `Text` diisi, hanya teks milik key itu yang diganti.
+3. Bila key itu berbagi offset teks dengan key lain, entrinya dipindahkan ke
+   offset baru supaya teks pasangannya tidak ikut berubah.
+4. Bila `Label` diisi, key yang sama diperbarui di `Labels.bin`. Kalau belum
+   ada, key itu ditambahkan; tabel label tetap urut menurut `Key`.
+5. Urutan tabel berkas bahasa dan seluruh nilai `Key` dipertahankan.
+6. Hasil diurai ulang: teks/label lain harus sama persis, hasil hanya berubah
+   pada key yang diminta, lalu `parse → rebuild` harus byte-identik.
+
+### Hasil baku
+
+| Perubahan            | Hasil                                               |
+| -------------------- | --------------------------------------------------- |
+| `--text`             | `<nama>_edited.bin` di folder sumber                |
+| `--label`            | `Labels_edited.bin` di folder `Labels.bin`          |
+| `--text` + `--label` | keduanya                                           |
+
+`-o/--output` menentukan hasil `.bin`. Pada edit label saja, `-o` dipakai
+sebagai nama hasil label. `--labels-out` khusus untuk hasil label.
+
+### Yang perlu diingat
+
+- Minimal satu dari `--text` atau `--label` harus diisi.
+- `--label` yang kosong atau hanya spasi ditolak.
+- Label hanya bisa disimpan bila `Labels.bin` tersedia.
+- Edit teks tidak menggeser `Index`, karena jumlah dan urutan entri tetap.
+- Berkas sumber tidak pernah ditimpa.
+
+### Lewat argumen
+
+```
+python main.py edit-string --bin English.bin --key 0x1234ABCD --text "Teks baru"
+python main.py edit-string --bin English.bin --key 0x1234ABCD --label LABEL_BARU
+python main.py edit-string --bin English.bin --key 0x1234ABCD --label LABEL_BARU --text "Teks baru"
+python main.py edit-string --target "D:\kerja\English.bin" --key 0x1234ABCD --text "Teks baru"
+```
+
+Bentuk langsung, tanpa subperintah:
+
+```
+python main.py --target "C:/Path/English.bin" --key 0x12345678 --text "Teks Baru"
+python main.py --target "C:/Path/English.bin" --key 0x12345678 --label LABEL_BARU
+python main.py --target "C:/Path/English.bin" --key 0x12345678 --label LABEL_BARU --text "Teks Baru"
+```
+
+`--escape` menafsirkan `\xHH` di `--text` sebagai byte kontrol.
+
+---
+
 ## Karakter khusus
 
 Tool ini **tidak pernah** mengganti karakter menjadi `?`. Teks dibaca sebagai
@@ -552,6 +677,13 @@ Yang perlu diketahui:
   - jumlah entri berkurang tepat sebanyak key yang diminta,
   - key yang dihapus tidak ada lagi di hasil,
   - seluruh `Key` dan `Text` yang tersisa tetap sama,
+  - kolom `Key` tetap terurut naik dan tidak duplikat,
+  - `parse → rebuild` byte-identik.
+- Untuk **Edit String**, pemeriksaannya:
+  - jumlah entri dan daftar `Key` tidak berubah,
+  - hanya teks/label milik key yang diminta yang berbeda,
+  - teks pasangan yang berbagi offset tidak ikut berubah,
+  - label lain di `Labels.bin` tetap sama,
   - kolom `Key` tetap terurut naik dan tidak duplikat,
   - `parse → rebuild` byte-identik.
 - `Verifikasi: LOLOS` berarti syarat-syarat di atas terpenuhi.
@@ -618,7 +750,8 @@ Poin yang mudah salah:
 - Menghapus entri menyusutkan tabel 8 byte per entri. Teks yang tidak dipakai
   lagi oleh key mana pun dibuang dari blob, dan offset entri tersisa digeser.
 - Satu string disimpan sekali per offset unik. Dua `Key` boleh menunjuk offset
-  yang sama.
+  yang sama. Saat teks salah satunya diedit, key itu dipindahkan ke offset
+  baru supaya pasangannya tidak ikut berubah.
 - Encoding teks adalah byte tunggal (Latin-1), **bukan** UTF-8. `English.bin`
   bawaan bahkan sudah kehilangan byte non-ASCII yang masih ada di `German.bin`
   (1079 kasus, mis. `ESPAOL` vs `ESPAÑOL`).
@@ -643,5 +776,6 @@ NFSMW Lang Tool/
     ├── nfstxt.py       # Jembatan tabel <-> .txt (index, text)
     ├── nfsadd.py       # Tambah string baru (key + label + text)
     ├── nfsremove.py    # Hapus string lama berdasarkan key
+    ├── nfsedit.py      # Ubah teks dan/atau label satu key
     └── tui.py          # Tampilan terminal dan menu
 ```
